@@ -1,0 +1,31 @@
+<service>
+	<id>regeditadservice.exe</id>
+	<name>RegeditADService</name>
+	<description>Сервис сервера Node.js приложения RegeditAD.</description>
+	<executable>C:\Program Files\nodejs\node.exe</executable>
+	<argument>--harmony</argument>
+	<argument>G:\Orojects\node_modules\node-windows\lib\wrapper.js</argument>
+	<argument>--file</argument>
+	<argument>G:\Orojects\server.js</argument>
+	<argument>--scriptoptions=</argument>
+	<argument>--log</argument>
+	<argument>RegeditADService wrapper</argument>
+	<argument>--grow</argument>
+	<argument>0.25</argument>
+	<argument>--wait</argument>
+	<argument>1</argument>
+	<argument>--maxrestarts</argument>
+	<argument>3</argument>
+	<argument>--abortonerror</argument>
+	<argument>n</argument>
+	<argument>--stopparentfirst</argument>
+	<argument>undefined</argument>
+	<logmode>rotate</logmode>
+	<stoptimeout>30sec</stoptimeout>
+	<serviceaccount>
+		<domain>BEAVULF</domain>
+		<user>LocalSystem</user>
+		<password></password>
+	</serviceaccount>
+	<workingdirectory>G:\Orojects</workingdirectory>
+</service>

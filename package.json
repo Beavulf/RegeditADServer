@@ -1,0 +1,31 @@
+{
+  "dependencies": {
+    "body-parser": "^1.20.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.0",
+    "jsonwebtoken": "^9.0.2",
+    "ldapjs": "^3.0.7",
+    "mongodb": "^6.9.0",
+    "mongoose": "^8.8.0",
+    "msnodesqlv8": "^4.5.0",
+    "mssql": "^11.0.1",
+    "multer": "^1.4.5-lts.1",
+    "node-windows": "^1.0.0-beta.8",
+    "pckg": "^0.1.1",
+    "winston": "^3.17.0",
+    "winston-daily-rotate-file": "^5.0.0",
+    "ws": "^8.18.0",
+    "ws-rate-limit": "^0.0.0"
+  },
+  "name": "regeditad",
+  "version": "1.0.0",
+  "main": "dbconnect.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "TsyhanokYS",
+  "license": "ISC",
+  "description": "ведение и аудит реестра АД"
+}
