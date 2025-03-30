@@ -1,16 +1,14 @@
-var Service = require('node-windows').Service;
+function chb(balance) {
+  // let balance = 0
+  return function (sum,...sss) {
+    balance += sum
+    console.log(`PRIVET ${sss}`);
+    
+    return balance;
+  }
+}
 
-// Создаем новый объект сервиса
-var svc = new Service({
-  name: 'RegeditADService',
-  description: 'Сервис сервера Node.js приложения RegeditAD.',
-  script: 'C:\\Orojects\\server.js' // укажите полный путь к вашему файлу app.js
-});
-
-// Событие "install" - сервис успешно установлен
-svc.on('install', function() {
-  svc.start();
-  console.log('Сервис установлен и запущен.');
-});
-
-svc.install();
+const change = chb(1000)
+console.log(change(100,'asdasd','11111'));
+console.log(change(300));
+console.dir(change)

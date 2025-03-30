@@ -449,6 +449,23 @@ const adtoolSchema = new Schema({
 ///////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////
+const stajirovkaSchema = new Schema({
+    _sotr: { type: Schema.Types.ObjectId, ref: `Sotrudnik`, required: true},
+    prikaz: {type: String, required: true},
+    data_prikaza: {type: Date, required: true},
+    data_n: {type: Date, required: true},
+    data_k: {type: Date, required: true},
+    _otkyda: { type: Schema.Types.ObjectId, ref: `Otdel`,required: true},
+    _kyda: { type: Schema.Types.ObjectId, ref: `Otdel`, required: true},
+    data_dob: {type: Date, required: true},
+    _who: {type: Schema.Types.ObjectId, ref: `Users`, required: true},
+    descrip: {type: String},
+    is_locked: Boolean
+})
+ const stajirovka = model('Stajirovka', stajirovkaSchema);
+///////////////////////////////////////////////////
+
+////////////////////////////////////////////////////
 // const otpyskSchema = new Schema({
 //     _sotr: { type: Schema.Types.ObjectId, ref: `Sotrudnik`, required: true},
 //     prikaz: {type: String, required: true},
@@ -498,22 +515,6 @@ const adtoolSchema = new Schema({
 ///////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////
-// const stajirovkaSchema = new Schema({
-//     _sotr: { type: Schema.Types.ObjectId, ref: `Sotrudnik`, required: true},
-//     prikaz: {type: String, required: true},
-//     data_prikaza: {type: Date, required: true},
-//     data_n_staj: {type: Date, required: true},
-//     data_k_staj: {type: Date, required: true},
-//     _otkyda: { type: Schema.Types.ObjectId, ref: `Otdel`,required: true},
-//     _kyda: { type: Schema.Types.ObjectId, ref: `Otdel`, required: true},
-//     data_dob: {type: Date, required: true},
-//     _who: {type: Schema.Types.ObjectId, ref: `Users`, required: true},
-//     descrip: {type: String}
-// })
-//  const stajirovka = model('Stajirovka', stajirovkaSchema);
-///////////////////////////////////////////////////
-
-////////////////////////////////////////////////////
 // const dekretSchema = new Schema({
 //     _sotr: { type: Schema.Types.ObjectId, ref: `Sotrudnik`, required: true},
 //     prikaz: {type: String, required: true},
@@ -553,5 +554,6 @@ module.exports = {
     Revizor: revizor,
     ChdTI: chdti,
     Aipsin: aipsin,
-    ADTool: adtool
+    ADTool: adtool,
+    Stajirovka: stajirovka,
 }
