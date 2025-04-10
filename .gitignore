@@ -1,23 +1,26 @@
-.env
+# Node.js общие файлы
 node_modules/
-.env
-.env.local
-.env.development
-.env.test
-.env.production
-.DS_Store
-.idea/
+
+# Файлы конфигурации VSCode
 .vscode/
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-build/
-dist/
-coverage/
-.next/
-.cache/
-.tmp/
-*.swp
-*.swo
-.codegpt
+
+# Логи
+logs/
+
+# Загруженные файлы
+uploads/
+
+# Пакетные файлы npm
+package-lock.json
+
+# Основной файл конфигурации
+.env
+
+# Резервные копии
+*.bak
+
+# Директория backup
+backu/
+
+# Директория daemon
+daemon/

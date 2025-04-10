@@ -45,6 +45,7 @@ const accessControl = {
 //проверка доступа по роли
 const checkAccess = (action, role) => accessControl[action]?.includes(role) || false;
 
+// подключение к монго ДБ
 async function startMongoConnection() {
   try {
     mongoClient = new MongoClient(process.env.MONGO_URL, {  });
@@ -57,6 +58,7 @@ async function startMongoConnection() {
     process.exit(1); // Завершаем процесс при ошибке подключения
   }
 }
+
 async function start() {
   try {
     // Подключение к MongoDB
@@ -147,22 +149,29 @@ async function start() {
        
         //сообщение от клиента
         ws.on('message', async (message) => {
-          const clientMessage = JSON.parse(message)
-          const actionType = clientMessage.type;
-          logger.info(`Сообщение от клиента: ${clientIP}`,clientMessage)
-
-          // Автоматическая проверка прав доступа
-          if (!checkAccess(actionType, userRole)) {
-            logger.warn(`Попытка выполнения действия ${decoded.username} (${actionType}) под ролью ${userRole}`)
-            ws.send(JSON.stringify({ error: 'Доступ запрещен: недостаточно прав для выполнения этого действия.' }));
-            return;  // Прекращаем выполнение, если доступ запрещён
+          try {
+            const clientMessage = JSON.parse(message)
+            const actionType = clientMessage.type;
+            logger.info(`Сообщение от клиента: ${clientIP}`,clientMessage)
+  
+            // Автоматическая проверка прав доступа
+            if (!checkAccess(actionType, userRole)) {
+              logger.warn(`Попытка выполнения действия ${decoded.username} (${actionType}) под ролью ${userRole}`)
+              ws.send(JSON.stringify({ error: 'Доступ запрещен: недостаточно прав для выполнения этого действия.' }));
+              return;  // Прекращаем выполнение, если доступ запрещён
+            }
+            //выполнение методов по 3апросу
+            if (msgHandler[actionType]) {
+              await msgHandler[actionType](ws, clientMessage.data, db, wss);
+            } else {
+              msgHandler.default(ws, clientMessage.data);
+            }
           }
-          //выполнение методов по 3апросу
-          if (msgHandler[actionType]) {
-            await msgHandler[actionType](ws, clientMessage.data, db, wss);
-          } else {
-            msgHandler.default(ws, clientMessage.data);
+          catch {
+            logger.error(`Ошибка при обработке сообщения от клиента: ${err.message}`);
+            ws.send(JSON.stringify({ error: 'Ошибка при обработке сообщения.' }));
           }
+          
         });
 
         //при отключении клиента
@@ -172,9 +181,20 @@ async function start() {
         });
       }
       catch (err) {
-        ws.close(); // Закрываем соединение, если токен неверен
-        console.log(`${getDateNow()} | Ошибка аутентификации при попытке авторизации: `, err.message);
-        logger.warn(`Ошибка аутентификации при попытке авторизации: ${err.message}`)
+        if (err.name === 'TokenExpiredError') {
+          // Отправка сообщения об истечении токена клиенту
+          ws.send(JSON.stringify({ error: 'Ваш токен истек. Пожалуйста, авторизуйтесь заново.' }));
+    
+          // Отключение клиента
+          ws.terminate();
+    
+          console.log(`${getDateNow()} | Клиент отключен из-за истечения токена: ${req.socket.remoteAddress}`);
+          logger.info(`Клиент отключен из-за истечения токена: ${req.socket.remoteAddress}`);
+        } else {
+          ws.close(); // Закрываем соединение, если токен неверен
+          console.log(`${getDateNow()} | Ошибка аутентификации при попытке авторизации: `, err.message);
+          logger.warn(`Ошибка аутентификации при попытке авторизации: ${err.message}`);
+        }
       }
     });
 

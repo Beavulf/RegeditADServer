@@ -207,7 +207,7 @@ module.exports = function(db) {
         }
     });
 
-    // получение времени интервала
+    // получение установленого времени интервала
     router.get('/intervaltime', async (req, res) => {
         try {
             const time = getIntervalTime()
@@ -222,7 +222,7 @@ module.exports = function(db) {
         }
     });
 
-    // получение данных из таблицы сразу
+    // получение (загрузка) данных из таблицы сразу
     router.get('/getdatanow', async (req, res) => {
         try {
 

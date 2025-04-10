@@ -83,7 +83,13 @@ async function deleteRelatedDocuments(sotrudnikId) {
         perevod.deleteMany({ _sotr: sotrudnikId }),
         vperevod.deleteMany({ _sotr: sotrudnikId }),
         familia.deleteMany({ _sotr: sotrudnikId }),
-        uvolnenie.deleteMany({ _sotr: sotrudnikId })
+        uvolnenie.deleteMany({ _sotr: sotrudnikId }),
+        zapros.deleteMany({ _sotr: sotrudnikId }),
+        svodka.deleteMany({ _sotr: sotrudnikId }),
+        revizor.deleteMany({ _sotr: sotrudnikId }),
+        chdti.deleteMany({ _sotr: sotrudnikId }),
+        aipsin.deleteMany({ _sotr: sotrudnikId }),
+        stajirovka.deleteMany({ _sotr: sotrudnikId })
     ]);
 }
 
