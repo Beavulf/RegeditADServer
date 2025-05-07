@@ -1,4 +1,5 @@
 const express = require('express');
+const cookieParser = require('cookie-parser');
 const http = require('http');
 const WebSocket = require('ws');
 const { MongoClient } = require('mongodb');
@@ -18,11 +19,12 @@ let db;
 
 // Создаем сервер Express и WebSocket
 const app = express();
+app.use(cookieParser())
 app.use(bodyParser.json());//
 app.use(cors());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/static', express.static(path.join(__dirname, 'static')));
-app.use('/', routes(db));
+app.use('/', routes);
 
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });  // WebSocket-сервер
@@ -113,6 +115,7 @@ async function start() {
       //работа с токенами
       const url = new URL(req.url, `http://${req.headers.host}`);
       const token = url.searchParams.get('token');  
+      
       if (!token) {
         ws.close(); // Закрываем соединение, если токен отсутствует
         logger.warn(`Подключение отклонено: токена не существует (пользователь не найден).`)

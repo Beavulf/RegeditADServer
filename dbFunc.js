@@ -4,7 +4,7 @@ const schemas = require('./mongoose.js');
 const {logger} = require('./helper/Logger.js');
 
 //получения списка ис коллекций
-async function getCollectionMongoose(data, db) {
+async function getCollectionMongoose(data) {
     try {
         const Model = schemas[data.collection]; // Получаем модель один раз
         if (!Model) { // Проверка на существование модели
@@ -54,7 +54,7 @@ async function insertInToCollection(data) {
 }
 
 // Обновление строки в коллекции с возвратом расширенных данных
-async function updateInCollection(data, db) {
+async function updateInCollection(data) {
     try {
         const Model = schemas[data.collection];
         if (!Model) {
@@ -111,7 +111,7 @@ async function updateInCollection(data, db) {
 }
 
 //удаление строки из коллекции
-async function deleteFromCollection (data, db) {
+async function deleteFromCollection (data) {
     try {
         if (!data.filter?._id) {
             logger.warn('ID документа не указан');

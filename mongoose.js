@@ -472,6 +472,43 @@ const stajirovkaSchema = new Schema({
 ///////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////
+const pravaItemSchema = new Schema({
+    id: {
+      type: Number,
+      required: true,
+    },
+    status: {
+      type: Number,
+      enum: [0, 1, 2], // 0 — не выдано, 1 — выдано, 2 — спец
+      required: true,
+    },
+    note: String, // по желанию
+}, { _id: false });
+
+const zaprosSPravaSchema = new Schema({
+    _sotr: { type: Schema.Types.ObjectId, ref: `Sotrudnik`, required: true, unique:true},
+    prikaz: {type: String, required: true},
+    data_prikaza: {type: Date, required: true},
+    data_dob: {type: Date, required: true},
+    prava: {
+        type: [pravaItemSchema],
+        required: true,
+        validate: {
+          validator: function (arr) {
+            const ids = arr.map(p => p.id);
+            return new Set(ids).size === ids.length; // только уникальность id
+          },
+          message: 'ID прав не должны повторяться.',
+        },
+      },
+    _who: {type: Schema.Types.ObjectId, ref: `Users`, required: true},
+    descrip: {type: String},
+    is_locked: Boolean
+})
+ const zaprosSPrava = model('ZaprosSPrava', zaprosSPravaSchema);
+///////////////////////////////////////////////////
+
+////////////////////////////////////////////////////
 // const otpyskSchema = new Schema({
 //     _sotr: { type: Schema.Types.ObjectId, ref: `Sotrudnik`, required: true},
 //     prikaz: {type: String, required: true},
@@ -562,4 +599,6 @@ module.exports = {
     Aipsin: aipsin,
     ADTool: adtool,
     Stajirovka: stajirovka,
+    ZaprosSPrava: zaprosSPrava,
+    
 }
