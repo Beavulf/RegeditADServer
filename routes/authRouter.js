@@ -14,7 +14,7 @@ router.post('/login', async (req, res) => {
         const authUser = await dbFunc.getCollectionMongoose({collection: `Users`, filter: {address:address}}); //ищем в бд пользователя
         if (authUser.length > 0) {  
             const user = authUser[0];    
-            const token = jwt.sign({ address, role: user.role, username:user.name }, secretKey, { expiresIn: '1h' });
+            const token = jwt.sign({ address, role: user.role, username:user.name }, secretKey, { expiresIn: '3600s' });
 
             res.cookie('token', token, {
                 httpOnly: true,     // Защита от XSS (JavaScript не получит доступ)
@@ -23,7 +23,7 @@ router.post('/login', async (req, res) => {
             });
 
             logger.info(`Успешная авторизация пользователя | ${address}.`);
-            return res.status(201).json({ token, role:user.role });
+            return res.status(201).json({ role:user.role });
         } else {
             logger.warn(`Попытка входа неавторизованного пользователя с | ${req.ip}.`);
             res.status(401).json({ error: 'Неверные учетные данные' });
@@ -41,11 +41,11 @@ router.get('/adress', (req, res) => res.json({ ip: req.ip }));
 router.post('/access', async (req, res) => {
     try {
         const { userData } = req.body;    
-        const data = {
+        const dataNewAccess = {
             collection: `Access`,
             body: { address:userData.client, login:userData.login, is_locked: false, data_dob:new Date() },
         };
-        const resInsert = await dbFunc.insertInToCollection(data);
+        const resInsert = await dbFunc.insertInToCollection(dataNewAccess);
         if (resInsert.error) {
             logger.warn(`Попытка отправки повтороно запроса на предоставление доступа: ${userData.client}`);
             res.status(401).json({ error: 'Вы уже отправляли запрос' });

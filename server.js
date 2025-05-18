@@ -1,17 +1,23 @@
-const express = require('express');
-const cookieParser = require('cookie-parser');
+// Node built-in modules
 const http = require('http');
-const WebSocket = require('ws');
-const { MongoClient } = require('mongodb');
-const bodyParser = require('body-parser')
-const dbFunc = require(`./dbFunc.js`)
-const cors = require('cors');
 const path = require('path');
+
+// Third-party modules
+const express = require('express');
+const WebSocket = require('ws');
+const cookieParser = require('cookie-parser');
+const bodyParser = require('body-parser');
+const cors = require('cors');
+const jwt = require('jsonwebtoken');
+const { MongoClient } = require('mongodb');
+
+// Local modules
 const routes = require('./routes/routes.js');
-const {logger} = require('./helper/Logger.js');
-const jwt = require(`jsonwebtoken`)
+const dbFunc = require('./dbFunc.js');
+const { logger } = require('./helper/Logger.js');
 const { msgHandler } = require('./routes/websocket-routes.js');
-require('dotenv').config()
+
+require('dotenv').config();
 
 const secretKey = process.env.JWT_SECRET_KEY
 let mongoClient;
@@ -20,8 +26,8 @@ let db;
 // Создаем сервер Express и WebSocket
 const app = express();
 app.use(cookieParser())
-app.use(bodyParser.json());//
-app.use(cors());
+app.use(bodyParser.json());
+app.use(cors({credentials:true, origin:process.env.CORS_DOMAINS}));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/static', express.static(path.join(__dirname, 'static')));
 app.use('/', routes);
@@ -56,6 +62,7 @@ async function startMongoConnection() {
     logger.info('MongoDB подключен с использованием пула соединений');
     console.log(`${getDateNow()} | Подключено к MongoDB`);
   } catch (error) {
+    console.error(`${getDateNow()} | Ошибка подключения к MongoDB: ${error}`);
     logger.error(`Ошибка подключения к MongoDB: ${error}`);
     process.exit(1); // Завершаем процесс при ошибке подключения
   }
@@ -112,38 +119,77 @@ async function start() {
 
     // Обработка подключений WebSocket, обработка одного клиента
     wss.on('connection', async (ws,req) => {
-      //работа с токенами
-      const url = new URL(req.url, `http://${req.headers.host}`);
-      const token = url.searchParams.get('token');  
-      
+      //работа с токенами      
+      // const url = new URL(req.url, `http://${req.headers.host}`);
+      // const token = url.searchParams.get('token');  
+
+      let token;
+      // Получаем cookies из заголовка
+      const cookies = req.headers.cookie;
+      if (cookies) {
+        const cookiesArray = cookies.split(';');
+        const tokenCookie = cookiesArray.find(cookie => cookie.trim().startsWith('token='));
+        if (tokenCookie) {
+          token = tokenCookie.split('=')[1].trim();
+        }
+      }
+      // Закрываем соединение, если токен отсутствует
       if (!token) {
-        ws.close(); // Закрываем соединение, если токен отсутствует
+        ws.close(); 
         logger.warn(`Подключение отклонено: токена не существует (пользователь не найден).`)
         return;
       }
             
+      // елси токен есть
       try {    
         const clientIP = req.socket.remoteAddress
         logger.info(`Клиент подключен (${wss.clients.size}-й) IP-адрес: ${clientIP}`)
         let userRole;
         let decoded;
-        //декодирование токена, получение роли , и обработка окончания действия токена
-        try {
-          decoded = jwt.verify(token, secretKey);
-          userRole = decoded.role
-          const expirationDate = new Date(decoded.exp * 1000).toString();
-          console.log(`${getDateNow()} | Пользователь аутентифицирован: ${decoded.username} (истекает: ${expirationDate}), роль: ${userRole} ${new Date(decoded.exp*1000).toString()}`);
-          logger.info(`Пользователь аутентифицирован: ${decoded.username} (истекает: ${expirationDate}), роль: ${userRole} ${new Date(decoded.exp*1000).toString()}`)
-        } catch (err) {
-          if (err.name === 'TokenExpiredError') {
-            logger.warn(`Токен истек ${decoded.username}`);
-            ws.send(JSON.stringify({ error: 'Токен истек. Пожалуйста, авторизуйтесь заново.', cmd:'logout' }));
-          } else {
-            logger.warn(`Ошибка аутентификации: ${err.message}`);
+        
+        // Функция проверки токена
+        const checkToken = () => {
+          try {
+            decoded = jwt.verify(token, secretKey);
+            return true;
+          } catch (err) {
+            if (err.name === 'TokenExpiredError') {
+              logger.warn(`Токен истек для пользователя ${decoded?.username || 'неизвестный'}`);
+              ws.send(JSON.stringify({ 
+                error: 'Токен истек, пожалуйста, авторизуйтесь заново.', 
+                cmd: 'logout' 
+              }));
+              setTimeout(() => {
+                ws.close();
+              }, 2000);
+            }
+            return false;
           }
-          ws.close();
+        };
+
+        // Установка интервала проверки токена каждую минуту
+        const tokenCheckInterval = setInterval(() => {
+          if (!checkToken()) {
+            clearInterval(tokenCheckInterval);
+          }
+        }, 60000); // Проверка каждую минуту
+
+        // При закрытии соединения очищаем интервал
+        ws.on('close', () => {
+          clearInterval(tokenCheckInterval);
+          console.log(`${getDateNow()} | Клиент отключен: `+wss.clients.size);
+          logger.info(`Клиент отключен: ${wss.clients.size}`);
+        });
+
+        // Начальная проверка токена
+        if (!checkToken()) {
           return;
-        }    
+        }
+
+        userRole = decoded.role
+        const expirationDate = new Date(decoded.exp * 1000).toLocaleTimeString();
+        console.log(`${getDateNow()} | Пользователь аутентифицирован: ${decoded.username} (сессия истекает: ${expirationDate}), роль: ${userRole}`);
+        logger.info(`Пользователь аутентифицирован: ${decoded.username} (сессия истекает: ${expirationDate}), роль: ${userRole}`)
 
         ws.on('error', (err) =>{
           console.log(`${getDateNow()} | Ошибка при работе с клиентом: ${err}`);
@@ -175,12 +221,6 @@ async function start() {
             ws.send(JSON.stringify({ error: 'Ошибка при обработке сообщения.' }));
           }
           
-        });
-
-        //при отключении клиента
-        ws.on('close', () => {
-          console.log(`${getDateNow()} | Клиент отключен: `+wss.clients.size);
-          logger.info(`Клиент отключен: ${wss.clients.size}`)
         });
       }
       catch (err) {
