@@ -509,6 +509,16 @@ const zaprosSPravaSchema = new Schema({
 ///////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////
+const pravaOtdelSchema = new Schema({
+    _otdel: { type: Schema.Types.ObjectId, ref: `Otdel`, required: true, unique:true},
+    prava: {type: String, required: true},
+    data_edit: {type: Date, required: true, default: new Date()},
+    descrip: {type: String},
+})
+ const pravaOtdel = model('PravaOtdel', pravaOtdelSchema);
+///////////////////////////////////////////////////
+
+////////////////////////////////////////////////////
 // const otpyskSchema = new Schema({
 //     _sotr: { type: Schema.Types.ObjectId, ref: `Sotrudnik`, required: true},
 //     prikaz: {type: String, required: true},
@@ -600,5 +610,5 @@ module.exports = {
     ADTool: adtool,
     Stajirovka: stajirovka,
     ZaprosSPrava: zaprosSPrava,
-    
+    PravaOtdel: pravaOtdel,
 }

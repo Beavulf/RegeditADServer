@@ -27,7 +27,7 @@ let db;
 const app = express();
 app.use(cookieParser())
 app.use(bodyParser.json());
-app.use(cors({credentials:true, origin:process.env.CORS_DOMAINS}));
+app.use(cors({credentials:true, origin:process.env.CORS_DOMAINS.split(',')}));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/static', express.static(path.join(__dirname, 'static')));
 app.use('/', routes);
@@ -50,7 +50,7 @@ const accessControl = {
   quitClientConnect: ['admin', 'manager'],
 };
 
-//проверка доступа по роли
+//проверка доступа к методу по роли
 const checkAccess = (action, role) => accessControl[action]?.includes(role) || false;
 
 // подключение к монго ДБ
