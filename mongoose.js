@@ -240,7 +240,11 @@ const contractSchema = new Schema({
     data_zakl: {type: Date, required: true},
     data_dob: {type: Date, required: true},
     time_edit: {type: Date, required: true},
-    certif_edit: {type: Date},
+    certif_edit: {type: Date, default: null},
+    originData: {
+        contract: { type: Date },
+        dover: { type: Date }
+    },
 
     prikaz_anull: {type: String,},
     data_anull: {type: Date,},
