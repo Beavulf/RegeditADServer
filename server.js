@@ -19,6 +19,11 @@ const { msgHandler } = require('./routes/websocket-routes.js');
 
 require('dotenv').config();
 
+// проверка на наличие переменных окружения
+['PORT', 'JWT_SECRET_KEY', 'MONGO_URL', 'MONGO_DB_CONNECTION_URL', 'CORS_DOMAINS'].forEach((key) => {
+  if (!process.env[key]) throw new Error(`Не задана переменная окружения: ${key}`);
+});
+
 const secretKey = process.env.JWT_SECRET_KEY
 let mongoClient;
 let db;
@@ -78,23 +83,35 @@ async function start() {
 
     // Когда происходит изменение в коллекции
     changeStream.on('change', async (change) => {
-      //получаем всю коллекцию с обьеденением данных (populate)
-      const updateCollection = await dbFunc.getCollectionMongoose({collection: change.ns.coll !== 'ADTool' ? change.ns.coll : undefined})      
-      if (updateCollection.error) { // Проверка на существование коллекции
-        logger.warn(`Коллекция не найдена: ${change.ns.coll}`)
-        return; // Возвращаем, чтобы избежать ошибок
-      }         
-      const filteredCollection = updateCollection?.find(row => row._id?.equals(change.documentKey._id));
-      logger.info(`Изменение (${change.operationType}) в базе данных: коллекция - ${change.ns.coll} | ID - ${change.documentKey._id}`)
-      
-      // Отправка изменений всем подключенным клиентам
-      wss.clients.forEach((client) => {
-        if (client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify(
-            {type:change.operationType, collection:change.ns.coll, id:change.documentKey._id, full:filteredCollection, client: client._socket.remoteAddress}
-          ));
-        }
-      });
+      try {
+        if (change.ns.coll === 'ADTool') return; // если изменение в коллекции ADTool, то пропускаем
+        //получаем всю коллекцию с обьеденением данных (populate)
+        const updateCollection = await dbFunc.getCollectionMongoose({collection: change.ns.coll})      
+        if (updateCollection.error) { // Проверка на существование коллекции
+          logger.warn(`Коллекция не найдена: ${change.ns.coll}`)
+          return; // Возвращаем, чтобы избежать ошибок
+        }         
+        const filteredCollection = updateCollection?.find(row => row._id?.equals(change.documentKey._id));
+        logger.info(`Изменение (${change.operationType}) в базе данных: коллекция - ${change.ns.coll} | ID - ${change.documentKey._id}`)
+        // Отправка изменений всем подключенным клиентам
+        wss.clients.forEach((client) => {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify(
+              {type:change.operationType, collection:change.ns.coll, id:change.documentKey._id, full:filteredCollection, client: client._socket.remoteAddress}
+            ));
+          }
+        });
+      }
+      catch (err) {
+        logger.error(`Ошибка при обработке изменения в базе данных: ${err}`);
+        wss.clients.forEach((client) => {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify(
+              {error: `Ошибка при обработке изменения в базе данных: ${err}`}
+            ));
+          }
+        });
+      }
     });
 
     changeStream.on("end", () => {
@@ -116,16 +133,26 @@ async function start() {
         logger.error(`Ошибка при остановке сервера: ${err}`);
       }
     });
-
+    process.on('uncaughtException', async (err) => {
+      logger.error(`Необработанная ошибка: ${err}`);
+      await mongoClient.close();
+      wss.close();
+      process.exit(1);
+    });
+    process.on('SIGTERM', async () => {
+      await changeStream.close();
+      await mongoClient.close();
+      wss.close();
+      process.exit(0);
+    });
     // Обработка подключений WebSocket, обработка одного клиента
     wss.on('connection', async (ws,req) => {
       //работа с токенами      
       // const url = new URL(req.url, `http://${req.headers.host}`);
       // const token = url.searchParams.get('token');  
-
       let token;
       // Получаем cookies из заголовка
-      const cookies = req.headers.cookie;
+      const cookies = req.headers?.cookie;
       if (cookies) {
         const cookiesArray = cookies.split(';');
         const tokenCookie = cookiesArray.find(cookie => cookie.trim().startsWith('token='));
@@ -196,7 +223,7 @@ async function start() {
           logger.error(`Ошибка при работе с клиентом: ${err}`)
         })
        
-        //сообщение от клиента
+        //получение и обработка сообщения от клиента
         ws.on('message', async (message) => {
           try {
             const clientMessage = JSON.parse(message)
@@ -216,7 +243,7 @@ async function start() {
               msgHandler.default(ws, clientMessage.data);
             }
           }
-          catch {
+          catch (err) {
             logger.error(`Ошибка при обработке сообщения от клиента: ${err.message}`);
             ws.send(JSON.stringify({ error: 'Ошибка при обработке сообщения.' }));
           }
@@ -254,6 +281,7 @@ async function start() {
   } catch (error) {
     console.error(`${getDateNow()} | Ошибка при запуске сервера:`, error);
     logger.error(`Ошибка при запуске сервера: ${error}`)
+    process.exit(1);
   }
 }
 

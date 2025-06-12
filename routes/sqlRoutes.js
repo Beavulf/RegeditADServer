@@ -1,5 +1,4 @@
 const express = require('express');
-const { logger } = require('../helper/Logger.js');
 const { getDataFromTable, startPeriodicTask, getAndRewriteArchiveData, stopPeriodicTask, getIntervalTime } = require('../connectSql.js');
 const dbFunc = require('../dbFunc.js');
 

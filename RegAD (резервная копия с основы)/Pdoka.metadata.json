@@ -1,0 +1,1 @@
+{"indexes":[{"v":{"$numberInt":"2"},"key":{"_id":{"$numberInt":"1"}},"name":"_id_"},{"v":{"$numberInt":"2"},"key":{"data_dob":{"$numberInt":"-1"}},"name":"data_dob_-1"}],"uuid":"e0dadb6995b8417f9dd7998930984f6a","collectionName":"Pdoka","type":"collection"}

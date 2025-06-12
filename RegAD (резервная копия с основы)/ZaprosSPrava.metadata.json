@@ -1,0 +1,1 @@
+{"indexes":[{"v":{"$numberInt":"2"},"key":{"_id":{"$numberInt":"1"}},"name":"_id_"},{"v":{"$numberInt":"2"},"key":{"_sotr":{"$numberInt":"1"}},"name":"_sotr_1","background":true,"unique":true}],"uuid":"6ccc98486d5e43b18e0abb86c8505a58","collectionName":"ZaprosSPrava","type":"collection"}
