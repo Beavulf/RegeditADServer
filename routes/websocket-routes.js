@@ -1,5 +1,5 @@
 const WebSocket = require('ws');
-const dbFunc = require('../dbFunc.js');
+const dbFunc = require('../dbService.js');
 
 const { logger } = require('../helper/Logger.js');
 
@@ -13,7 +13,7 @@ const msgHandler = {
       const dataCollection = await dbFunc.getCollectionMongoose(messageData)
       if (dataCollection.error) {
         logger.warn(`Коллекция не найдена: ${dataCollection.logErr}`)
-        ws.send(JSON.stringify({ error: 'Коллекция не найдена' }));
+        ws.send(JSON.stringify({ error: `Коллекция не найдена ${dataCollection.error}` }));
       } else {
         ws.send(JSON.stringify({type:`getCollectionMongoose`, data:dataCollection, collection:messageData.collection}));
       }

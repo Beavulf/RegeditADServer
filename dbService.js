@@ -8,8 +8,9 @@ async function getCollectionMongoose(data) {
     try {
         const Model = schemas[data.collection]; // Получаем модель один раз
         if (!Model) { // Проверка на существование модели
+            if (data.collection === 'Clients') {return {message:'Клиенты получены'}}
             logger.warn(`Модель для коллекции ${data.collection} не найдена.`);
-            return {error:'Коллекция не найдена'}; // Возвращаем пустой массив, чтобы избежать ошибок
+            return {error:`Коллекция не найдена ${data.collection}`}; // Возвращаем пустой массив, чтобы избежать ошибок
         }
         const schema = Model.schema;
 

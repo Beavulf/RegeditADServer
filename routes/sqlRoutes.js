@@ -1,6 +1,6 @@
 const express = require('express');
 const { getDataFromTable, startPeriodicTask, getAndRewriteArchiveData, stopPeriodicTask, getIntervalTime } = require('../connectSql.js');
-const dbFunc = require('../dbFunc.js');
+const dbFunc = require('../dbService.js');
 
 const router = express.Router();
 

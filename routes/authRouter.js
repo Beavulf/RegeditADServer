@@ -1,6 +1,6 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const dbFunc = require('../dbFunc.js');
+const dbFunc = require('../dbService.js');
 const { logger } = require('../helper/Logger.js');
 
 const router = express.Router();

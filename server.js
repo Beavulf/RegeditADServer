@@ -1,6 +1,7 @@
 // Node built-in modules
 const http = require('http');
 const path = require('path');
+const { exec } = require('child_process');
 
 // Third-party modules
 const express = require('express');
@@ -13,9 +14,10 @@ const { MongoClient } = require('mongodb');
 
 // Local modules
 const routes = require('./routes/routes.js');
-const dbFunc = require('./dbFunc.js');
+const dbFunc = require('./dbService.js');
 const { logger } = require('./helper/Logger.js');
 const { msgHandler } = require('./routes/websocket-routes.js');
+const { log } = require('console');
 
 require('dotenv').config();
 
@@ -27,6 +29,7 @@ require('dotenv').config();
 const secretKey = process.env.JWT_SECRET_KEY
 let mongoClient;
 let db;
+let changeStream;
 
 // Создаем сервер Express и WebSocket
 const app = express();
@@ -55,8 +58,32 @@ const accessControl = {
   quitClientConnect: ['admin', 'manager'],
 };
 
+//отправка сообщения всем клиентам
+const broadcastMessage = (message) => {
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify(message));
+    }
+  });
+}
+
 //проверка доступа к методу по роли
 const checkAccess = (action, role) => accessControl[action]?.includes(role) || false;
+
+//перезапуск сервиса MongoDB
+function restartMongoService() {
+  exec('powershell.exe Restart-Service -Name "MongoDB"', (error, stdout, stderr) => {
+    if (error) {
+      console.error(`${getDateNow()} | Ошибка при попытке перезапуска MongoDB: ${error.message}`);
+      logger.error(`Ошибка при попытке перезапуска MongoDB: ${error.message}`);
+      broadcastMessage({ error: 'Не удалось перезапустить MongoDB. Обратитесь к администратору.' });
+      return;
+    }
+    logger.info('Служба MongoDB перезапущена');
+    console.log(`${getDateNow()} | Служба MongoDB была перезапущена. Попробуйте переподключиться.`);
+    broadcastMessage({ warning: 'Служба MongoDB была перезапущена. Попробуйте переподключиться.' });
+  });
+}
 
 // подключение к монго ДБ
 async function startMongoConnection() {
@@ -73,56 +100,67 @@ async function startMongoConnection() {
   }
 }
 
+//запуск change stream
+function startChangeStream() {
+  if (changeStream) {
+    changeStream.removeAllListeners();
+    try { changeStream.close(); } catch {}
+  }
+  changeStream = db.watch([], { fullDocument: 'updateLookup' });
+
+  changeStream.on('change', async (change) => {
+    try {
+      if (change.ns.coll === 'ADTool') return;
+      const updateCollection = await dbFunc.getCollectionMongoose({collection: change.ns.coll})
+      if (updateCollection.error) {
+        logger.warn(`Коллекция не найдена: ${change.ns.coll}`)
+        return;
+      }
+      const filteredCollection = updateCollection?.find(row => row._id?.equals(change.documentKey._id));
+      logger.info(`Изменение (${change.operationType}) в базе данных: коллекция - ${change.ns.coll} | ID - ${change.documentKey._id}`)
+      broadcastMessage({type:change.operationType, collection:change.ns.coll, id:change.documentKey._id, full:filteredCollection});
+    } catch (err) {
+      logger.error(`Ошибка при обработке изменения в базе данных: ${err}`);
+      broadcastMessage({error: `Ошибка при обработке изменения в базе данных: ${err}`})
+    }
+  });
+
+  changeStream.on('end', () => {
+    logger.error('Change Stream END');
+  });
+
+  changeStream.on('error', (error) => {
+    logger.error(`Change Stream error: ${error}`);
+    console.error(`${getDateNow()} | Change Stream error: ${error}`);
+    broadcastMessage({ error: 'Потеряно соединение с MongoDB. Попытка перезапуска...' });
+    restartMongoAndReconnect();
+  });
+}
+
+//перезапуск MongoDB и change stream
+async function restartMongoAndReconnect() {
+  restartMongoService();
+  setTimeout(async () => {
+    try {
+      if (mongoClient) {
+        try { await mongoClient.close(); } catch {}
+      }
+      await startMongoConnection();
+      startChangeStream();
+      logger.info('Change stream успешно перезапущен после рестарта MongoDB');
+      broadcastMessage({ warning: 'Соединение с MongoDB восстановлено, change stream перезапущен.' });
+    } catch (err) {
+      logger.error('Ошибка переподключения к MongoDB после рестарта: ' + err);
+      setTimeout(restartMongoAndReconnect, 5000);
+    }
+  }, 5000);
+}
+
 async function start() {
   try {
-    // Подключение к MongoDB
-    await startMongoConnection()
+    await startMongoConnection();
+    startChangeStream();
     
-    // Запуск отслеживания изменений в MongoDB через Change Streams
-    const changeStream = db.watch([], { fullDocument: 'updateLookup' });
-
-    // Когда происходит изменение в коллекции
-    changeStream.on('change', async (change) => {
-      try {
-        if (change.ns.coll === 'ADTool') return; // если изменение в коллекции ADTool, то пропускаем
-        //получаем всю коллекцию с обьеденением данных (populate)
-        const updateCollection = await dbFunc.getCollectionMongoose({collection: change.ns.coll})      
-        if (updateCollection.error) { // Проверка на существование коллекции
-          logger.warn(`Коллекция не найдена: ${change.ns.coll}`)
-          return; // Возвращаем, чтобы избежать ошибок
-        }         
-        const filteredCollection = updateCollection?.find(row => row._id?.equals(change.documentKey._id));
-        logger.info(`Изменение (${change.operationType}) в базе данных: коллекция - ${change.ns.coll} | ID - ${change.documentKey._id}`)
-        // Отправка изменений всем подключенным клиентам
-        wss.clients.forEach((client) => {
-          if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify(
-              {type:change.operationType, collection:change.ns.coll, id:change.documentKey._id, full:filteredCollection, client: client._socket.remoteAddress}
-            ));
-          }
-        });
-      }
-      catch (err) {
-        logger.error(`Ошибка при обработке изменения в базе данных: ${err}`);
-        wss.clients.forEach((client) => {
-          if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify(
-              {error: `Ошибка при обработке изменения в базе данных: ${err}`}
-            ));
-          }
-        });
-      }
-    });
-
-    changeStream.on("end", () => {
-      console.error(`${getDateNow()} | Change Stream END:`);
-      logger.error(`Change Stream END:`)
-    });
-    changeStream.on("error", (error) => {
-        console.error(`${getDateNow()} | Change Stream error:`, error);
-        logger.error(`Change Stream error: ${error}`)
-    });
-
     process.on('SIGINT', async () => {
       try {
         await changeStream.close();
