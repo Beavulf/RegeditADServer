@@ -1,6 +1,9 @@
 // Node built-in modules
 const http = require('http');
 const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const { pipeline } = require('stream/promises');
 const { exec } = require('child_process');
 
 // Third-party modules
@@ -17,7 +20,6 @@ const routes = require('./routes/routes.js');
 const dbFunc = require('./dbService.js');
 const { logger } = require('./helper/Logger.js');
 const { msgHandler } = require('./routes/websocket-routes.js');
-const { log } = require('console');
 
 require('dotenv').config();
 
@@ -50,9 +52,9 @@ function getDateNow() {
 
 //распределение ролей на 3адачи
 const accessControl = {
-  insertInToCollection: ['admin', 'manager'],      
-  updateInCollection: ['admin', 'manager'],        
-  deleteFromCollection: ['admin', 'manager'], 
+  insertInToCollection: ['admin', 'manager'],
+  updateInCollection: ['admin', 'manager'],
+  deleteFromCollection: ['admin', 'manager'],
   getAllClientsIp: [`admin`, `manager`],
   getCollectionMongoose: [`admin`, `manager`],
   quitClientConnect: ['admin', 'manager'],

@@ -523,68 +523,18 @@ const pravaOtdelSchema = new Schema({
 ///////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////
-// const otpyskSchema = new Schema({
-//     _sotr: { type: Schema.Types.ObjectId, ref: `Sotrudnik`, required: true},
-//     prikaz: {type: String, required: true},
-//     data_prikaza: {type: Date, required: true},
-//     data_n_otp: {type: Date, required: true},
-//     data_k_otp: {type: Date, required: true},
-//     type: {type: String, required: true},
-//     data_dob: {type: Date, required: true},
-//     _who: {type: Schema.Types.ObjectId, ref: `Users`, required: true},
-//     descrip: {type: String}
-// })
-//  const otpysk = model('Otpysk', otpyskSchema);
+const aps2020Schema = new Schema({
+    _sotr: { type: Schema.Types.ObjectId, ref: `Sotrudnik`, required: true},
+    prikaz: {type: String, required: true},
+    data_prikaza: {type: Date, required: true},
+    prava: {type: String, required: true},
+    data_dob: {type: Date, required: true},
+    _who: {type: Schema.Types.ObjectId, ref: `Users`, required: true},
+    descrip: {type: String},
+    is_locked: Boolean
+});
+const aps2020 = model('APS2020', aps2020Schema);
 ///////////////////////////////////////////////////
-
-////////////////////////////////////////////////////
-// const izmeneniaSchema = new Schema({
-//     _sotr: { type: Schema.Types.ObjectId, ref: `Sotrudnik`, required: true},
-//     old_prikaz: {type: String, required: true},
-//     new_prikaz: {type: String, required: true},
-//     data_dob: {type: Date, required: true},
-//     _who: {type: Schema.Types.ObjectId, ref: `Users`, required: true},
-//     descrip: {type: String}
-// })
-// const izmenenia = model('Izmenenia', izmeneniaSchema);
-// const newIzmen = new izmenenia({ _sotr: newSotr._id, old_prikaz: '1', new_prikaz:`2`,data_dob: new Date(), who: `TsyhanokYS`, descrip: `admin`});
-// newIzmen.save()
-// .then(user => console.log('Izmen сохранен:', user))
-// .catch(err => console.error('Ошибка сохранения izmena'));
-///////////////////////////////////////////////////
-
-////////////////////////////////////////////////////
-// const obychenieSchema = new Schema({
-//     _sotr: { type: Schema.Types.ObjectId, ref: `Sotrudnik`, required: true},
-//     prikaz: {type: String, required: true},
-//     data_prikaza: {type: Date, required: true},
-//     data_n_obych: {type: Date, required: true},
-//     data_k_obych: {type: Date, required: true},
-//     data_dob: {type: Date, required: true},
-//     _who: {type: Schema.Types.ObjectId, ref: `Users`, required: true},
-//     descrip: {type: String}
-// })
-//  const obychenie = model('Obychenie', obychenieSchema);
-// const newObych = new obychenie({ name: `Старший инспектор`, descrip: ''});
-// newObych.save()
-// .then(user => console.log('Obych сохранен:', user))
-// .catch(err => console.error('Ошибка сохранения obychen'));
-///////////////////////////////////////////////////
-
-////////////////////////////////////////////////////
-// const dekretSchema = new Schema({
-//     _sotr: { type: Schema.Types.ObjectId, ref: `Sotrudnik`, required: true},
-//     prikaz: {type: String, required: true},
-//     data_prikaza: {type: Date, required: true},
-//     data_n_dekr: {type: Date, required: false},
-//     data_k_dekr: {type: Date, required: true},
-//     data_dob: {type: Date, required: true},
-//     _who: {type: Schema.Types.ObjectId, ref: `Users`, required: true},
-//     descrip: {type: String}
-// })
-//  const dekret = model('Dekret', dekretSchema);
-///////////////////////////////////////////////////
-
 
 module.exports = {
     Otdel:otdel,
@@ -615,4 +565,5 @@ module.exports = {
     Stajirovka: stajirovka,
     ZaprosSPrava: zaprosSPrava,
     PravaOtdel: pravaOtdel,
+    APS2020: aps2020
 }
