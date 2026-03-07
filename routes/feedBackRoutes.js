@@ -33,16 +33,16 @@ const upload = multer({
 });
 
 // const APS_FILE_PATH = '\\\\10.6.100.13\\PUBLIC\\Информационная безопасность\\aps.xlsx';
-const APS_FILE_PATH = 'G:\\aps.xlsx';
+// const APS_FILE_PATH = 'G:\\aps.xlsx';
 
-router.get('/files/aps', (req, res) => {
-  res.sendFile(APS_FILE_PATH, (err) => {
-    if (err) {
-      console.error('Ошибка при отдаче файла:', err);
-      return res.status(404).json({ error: 'Файл не найден или нет доступа' });
-    }
-  });
-});
+// router.get('/files/aps', (req, res) => {
+//   res.sendFile(APS_FILE_PATH, (err) => {
+//     if (err) {
+//       console.error('Ошибка при отдаче файла:', err);
+//       return res.status(404).json({ error: 'Файл не найден или нет доступа' });
+//     }
+//   });
+// });
 
 // создание фидбэка
 router.post('/feedback', upload.single('image'), async (req, res) => {
