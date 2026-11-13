@@ -3,196 +3,274 @@ const { ObjectId } = require('mongodb');
 const schemas = require('./mongoose.js');
 const {logger} = require('./helper/Logger.js');
 
-//получения списка ис коллекций
+// ошибка, сообщение которой можно безопасно показать клиенту
+class ValidationError extends Error {
+    constructor(message) {
+        super(message);
+        this.userMessage = message;
+    }
+}
+
+// получение модели коллекции с проверкой (Mongoose — служебный экспорт, не модель)
+function getModel(collection) {
+    if (!collection || typeof collection !== 'string') return null;
+    if (collection === 'Mongoose') return null;
+    return schemas[collection] || null;
+}
+
+// безопасное создание ObjectId с понятной ошибкой вместо CastError
+function toObjectId(id, fieldName = 'ID') {
+    try {
+        return new ObjectId(id);
+    } catch {
+        throw new ValidationError(`Некорректный формат ${fieldName}: "${id}"`);
+    }
+}
+
+// кеширование опций populate на схеме (выполняется один раз для каждой модели)
+function getPopulateOptions(schema) {
+    if (!schema._populateOptions) {
+        schema._populateOptions = Object.entries(schema.paths)
+            .filter(([_, path]) => path.options && path.options.ref)
+            .map(([key, path]) => ({
+                path: key,
+                select: key === '_sotr' ? 'fio' : 'name',
+            }));
+    }
+    return schema._populateOptions;
+}
+
+// единый формат сообщения об ошибке для клиента (детали — только в лог)
+function toClientError(err) {
+    return err.userMessage || err.codeName || err.message || String(err);
+}
+
+//получения списка из коллекций
 async function getCollectionMongoose(data) {
     try {
-        const Model = schemas[data.collection]; // Получаем модель один раз
-        if (!Model) { // Проверка на существование модели
-            if (data.collection === 'Clients') {return {message:'Клиенты получены'}}
-            logger.warn(`Модель для коллекции ${data.collection} не найдена.`);
-            return {error:`Коллекция не найдена ${data.collection}`}; // Возвращаем пустой массив, чтобы избежать ошибок
+        const Model = getModel(data?.collection);
+        if (!Model) {
+            if (data?.collection === 'Clients') {return {message:'Клиенты получены'}}
+            logger.warn(`Модель для коллекции ${data?.collection} не найдена.`);
+            return {error:`Коллекция не найдена ${data?.collection}`};
         }
-        const schema = Model.schema;
-
-        // Оптимизация: кеширование опций populate
-        if (!schema._populateOptions) {
-            schema._populateOptions = Object.entries(schema.paths)
-                .filter(([_, path]) => path.options && path.options.ref)
-                .map(([key, path]) => ({
-                    path: key,
-                    select: key === '_sotr' ? 'fio' : 'name',
-                }));
-        }
-
-        const filter = data.filter || {};
-        const collData = await Model.find(filter)
-            .populate(schema._populateOptions)
+        const collData = await Model.find(data.filter || {})
+            .populate(getPopulateOptions(Model.schema))
             .lean()
             .exec();
         return collData;
     } catch (err) {
         logger.error(`Ошибка при получении коллекции БД: \n ${err}`);
-        return {error:`Ошибка при получении коллекции: ${err.codeName}`, logErr:err};
+        return {error:`Ошибка при получении коллекции: ${toClientError(err)}`, logErr:err};
+    }
+}
+
+// получение одного документа по id (используется change stream в server.js)
+async function getDocumentById(collection, id) {
+    try {
+        const Model = getModel(collection);
+        if (!Model || !id) return null;
+        return await Model.findById(toObjectId(id))
+            .populate(getPopulateOptions(Model.schema))
+            .lean()
+            .exec();
+    } catch (err) {
+        if (!(err instanceof ValidationError)) {
+            logger.error(`Ошибка при получении документа ${collection} по id ${id}: ${err}`);
+        }
+        return null;
     }
 }
 
 // добавление записи в коллекцию
 async function insertInToCollection(data) {
     try {
-        const Model = schemas[data.collection];
+        const Model = getModel(data?.collection);
         if (!Model) {
-            logger.warn(`Модель для коллекции ${data.collection} не найдена.`);
-            return {error:`Модель для коллекции ${data.collection} не найдена.`};
+            logger.warn(`Модель для коллекции ${data?.collection} не найдена.`);
+            return {error:`Модель для коллекции ${data?.collection} не найдена.`};
+        }
+        if (!data.body || (typeof data.body !== 'object')) {
+            return {error:'Не переданы данные для добавления (body).'};
         }
         const body = Array.isArray(data.body) ? data.body : [data.body];
+        const hasEmpty = body.some((item) => !item || typeof item !== 'object' || Array.isArray(item));
+        if (hasEmpty) {
+            return {error:'Переданы некорректные данные для добавления (body).'};
+        }
+
         const result = await Model.insertMany(body);
-        logger.info(`Успешное добавление записи в коллекцию ${data.collection}.`);
-        return `Insert complete`;
+        logger.info(`Успешное добавление записи в коллекцию ${data.collection} (${result.length} шт.).`);
+        return {ok:true, inserted:result.length};
     } catch (err) {
         logger.error(`Ошибка при добавлении записей в БД: \n ${err}`);
-        return {error:`: \n ${err}`, logErr:err};
+        // дубликат уникального индекса — частый понятный случай
+        if (err.code === 11000) {
+            return {error:'Запись с таким уникальным значением уже существует.', logErr:err};
+        }
+        if (err.name === 'ValidationError') {
+            return {error:`Проверка данных не пройдена: ${err.message}`, logErr:err};
+        }
+        return {error:`Ошибка при добавлении: ${toClientError(err)}`, logErr:err};
     }
 }
 
 // Обновление строки в коллекции с возвратом расширенных данных
 async function updateInCollection(data) {
     try {
-        const Model = schemas[data.collection];
+        const Model = getModel(data?.collection);
         if (!Model) {
-            logger.warn(`Модель для коллекции ${data.collection} не найдена.`);
-            return null;
+            logger.warn(`Модель для коллекции ${data?.collection} не найдена.`);
+            return {error:`Модель для коллекции ${data?.collection} не найдена.`};
         }
-        const schema = Model.schema;
+        const populateOptions = getPopulateOptions(Model.schema);
 
-        if (!schema._populateOptions) {
-            schema._populateOptions = Object.entries(schema.paths)
-                .filter(([_, path]) => path.options && path.options.ref)
-                .map(([key, path]) => ({
-                    path: key,
-                    select: key === '_sotr' ? 'fio' : 'name',
-                }));
-        }
-
-        //для обновление прав доки и настд (передается массив)
+        //для обновления прав доки и настд (передается массив)
         if (Array.isArray(data.value)) {
+            if (data.value.length === 0) {
+                return {error:'Передан пустой массив для обновления.'};
+            }
+            const invalid = data.value.find((item) => !item?._pdoka);
+            if (invalid) {
+                return {error:'В элементе обновления отсутствует _pdoka.'};
+            }
+
             const bulkOperations = data.value.map((item) => ({
                 updateOne: {
-                    filter: { _id: new ObjectId(item._pdoka) },
+                    filter: { _id: toObjectId(item._pdoka, '_pdoka') },
                     update: { $set: { ...item, is_locked: false } },
                 },
             }));
 
-            const result = await Model.bulkWrite(bulkOperations).catch(err => {
-                logger.error(`Ошибка при выполнении bulkWrite: ${err}`);
-                throw err;
-            });;
+            const result = await Model.bulkWrite(bulkOperations);
+            logger.info(`bulkWrite в коллекции ${data.collection}: изменено ${result.modifiedCount ?? result.nModified} из ${bulkOperations.length}.`);
+
             // Оптимизация: получение только _id обновленных документов
-            const updatedIds = data.value.map((item) => new ObjectId(item._pdoka));
+            const updatedIds = data.value.map((item) => toObjectId(item._pdoka, '_pdoka'));
             const updatedDocuments = await Model.find({ _id: { $in: updatedIds } })
-                .populate(schema._populateOptions)
+                .populate(populateOptions)
                 .lean()
                 .exec();
             return updatedDocuments;
-        } else {
-            const result = await Model.findOneAndUpdate(
-                { _id: new ObjectId(data.filter._id) },
-                { $set: data.value },
-                { new: true } // Важно для получения обновленного документа
-            )
-            .populate(schema._populateOptions)
-            .lean()
-            .exec();
-
-            return result; //возвращаем результат
         }
+
+        if (!data.value || typeof data.value !== 'object' || Array.isArray(data.value)) {
+            return {error:'Не переданы данные для обновления (value).'};
+        }
+        if (!data.filter?._id) {
+            return {error:'Не указан ID документа для обновления (filter._id).'};
+        }
+
+        const result = await Model.findOneAndUpdate(
+            { _id: toObjectId(data.filter._id) },
+            { $set: data.value },
+            { new: true, runValidators: false } // Важно для получения обновленного документа
+        )
+        .populate(populateOptions)
+        .lean()
+        .exec();
+
+        if (!result) {
+            logger.warn(`Документ для обновления не найден: ${data.collection} / ${data.filter._id}`);
+            return {error:'Документ для обновления не найден.'};
+        }
+        return result; //возвращаем результат
     } catch (err) {
         logger.error(`Ошибка при изменении записи в БД: \n ${err}`);
-        return {error:err.codeName, logErr:err};
+        if (err.code === 11000) {
+            return {error:'Запись с таким уникальным значением уже существует.', logErr:err};
+        }
+        return {error:toClientError(err), logErr:err};
     }
 }
 
 //удаление строки из коллекции
 async function deleteFromCollection (data) {
     try {
-        if (!data.filter?._id) {
+        if (!data?.filter?._id) {
             logger.warn('ID документа не указан');
             return {error:'ID документа не указан'};
-          }
-          
-        const Model = schemas[data.collection];
-        if (!Model) {
-            logger.warn(`Модель для коллекции ${data.collection} не найдена.`);
-            return {error:'Коллекция не найдена'}; // Возвращаем сообщение об ошибке
         }
 
-        if ([`Otdel`, `Doljnost`].includes(data.collection)) {
-            const [fiendOtdelID, fiendDoljnostID] = await Promise.all([
-                schemas['Otdel'].findOne({ name: 'Удаленный отдел' }),
-                schemas['Doljnost'].findOne({ name: 'Удаленная должность' })
-              ]);
+        const Model = getModel(data.collection);
+        if (!Model) {
+            logger.warn(`Модель для коллекции ${data.collection} не найдена.`);
+            return {error:'Коллекция не найдена'};
+        }
 
-            if (new ObjectId(data.filter._id).equals(fiendOtdelID._id) || new ObjectId(data.filter._id).equals(fiendDoljnostID._id)) {
+        // защита дефолтных значений для отдела и должности
+        if ([`Otdel`, `Doljnost`].includes(data.collection)) {
+            const defaultName = data.collection === 'Otdel' ? 'Удаленный отдел' : 'Удаленная должность';
+            const defaultDoc = await Model.findOne({ name: defaultName });
+            if (!defaultDoc) {
+                logger.error(`Дефолтная запись "${defaultName}" не найдена в коллекции ${data.collection}.`);
+                return {error:`Дефолтная запись "${defaultName}" не найдена. Сначала создайте её.`};
+            }
+            if (toObjectId(data.filter._id).equals(defaultDoc._id)) {
                 logger.warn('Попытка удаления дефолтных значений.');
                 return {error:'Попытка удаления дефолтных значений невозможна.'};
             }
         }
-        const deletedDocument = await Model.findById(new ObjectId(data.filter._id));
+
+        const docId = toObjectId(data.filter._id);
+        const deletedDocument = await Model.findById(docId);
 
         if (!deletedDocument) {
             logger.warn('Документ не найден для удаления');
             return {error:'Документ не найден'};
         }
         await deletedDocument.deleteOne()
+
+        // ссылки на удалённый отдел/должность заменяем на дефолтные
         if ([`Otdel`, `Doljnost`].includes(data.collection)) {
-            const fiendOtdelID = await schemas[`Otdel`].findOne({ name: 'Удаленный отдел' });
-            const fiendDoljnostID = await schemas[`Doljnost`].findOne({ name: `Удаленная должность` });
-            const deletedIds = [
-                { deletedId: deletedDocument._id, defaultId: fiendOtdelID._id, targetRef: 'Otdel' },
-                { deletedId: deletedDocument._id, defaultId: fiendDoljnostID._id, targetRef: 'Doljnost' },
-            ];
-            await updateReferencesAfterDelete(deletedIds);
+            const defaultName = data.collection === 'Otdel' ? 'Удаленный отдел' : 'Удаленная должность';
+            const defaultDoc = await Model.findOne({ name: defaultName });
+            if (defaultDoc) {
+                await updateReferencesAfterDelete(deletedDocument._id, data.collection, defaultDoc._id);
+            } else {
+                logger.error(`Дефолтная запись "${defaultName}" не найдена — ссылки на удалённую запись не заменены.`);
+            }
         }
 
         return 'Удаление и обновление завершены';
     } catch (err) {
         logger.error(`Ошибка при удалении записи из БД: \n ${err}`);
-        return {error:`Ошибка при удалении: ${err.codeName}`,logErr:err};
+        return {error:`Ошибка при удалении: ${toClientError(err)}`,logErr:err};
     }
 }
-// Функция для обновления сотрудников, назначая новый отдел
-async function updateReferencesAfterDelete(deletedIds, targetRefs) {
+
+// замена ссылок на удалённую запись (targetCollection) на дефолтную во всех коллекциях
+async function updateReferencesAfterDelete(deletedId, targetCollection, defaultId) {
     try {
         // Перебор всех моделей, зарегистрированных в `schemas`
         for (const [modelName, model] of Object.entries(schemas)) {
+            if (modelName === 'Mongoose' || !model?.schema) continue;
             const schema = model.schema;
 
-            // Обработка каждой пары: { удалённый ID, коллекция-цель }
-            for (const { deletedId, defaultId, targetRef } of deletedIds) {
-                // Поиск полей, которые ссылаются на указанную коллекцию
-                const foreignKeyFields = Object.entries(schema.paths)
-                    .filter(([fieldName, field]) => field.options && field.options.ref === targetRef)
-                    .map(([fieldName]) => fieldName);
+            // Поиск полей, которые ссылаются на указанную коллекцию
+            const foreignKeyFields = Object.entries(schema.paths)
+                .filter(([fieldName, field]) => field.options && field.options.ref === targetCollection)
+                .map(([fieldName]) => fieldName);
 
-                // Если есть такие поля, обновить документы
-                if (foreignKeyFields.length > 0) {
-                    const updateQuery = foreignKeyFields.reduce((query, field) => {
-                        query[field] = deletedId; // Поля с удалённым ID
-                        return query;
-                    }, {});
+            // Если есть такие поля, обновить документы
+            if (foreignKeyFields.length > 0) {
+                const updateQuery = foreignKeyFields.reduce((query, field) => {
+                    query[field] = deletedId; // Поля с удалённым ID
+                    return query;
+                }, {});
 
-                    const updateSet = foreignKeyFields.reduce((set, field) => {
-                        set[field] = defaultId; // Замена на дефолтный ID
-                        return set;
-                    }, {});
+                const updateSet = foreignKeyFields.reduce((set, field) => {
+                    set[field] = defaultId; // Замена на дефолтный ID
+                    return set;
+                }, {});
 
-                    const result = await model.updateMany(updateQuery, { $set: updateSet });
+                const result = await model.updateMany(updateQuery, { $set: updateSet });
 
-                    logger.info(
-                        `Обновлено документов в коллекции "${modelName}" для поля "${targetRef}": ${
-                            result.nModified || result.modifiedCount
-                        }`
-                    );
-                }
+                logger.info(
+                    `Обновлено документов в коллекции "${modelName}" для поля "${targetCollection}": ${
+                        result.modifiedCount ?? result.nModified
+                    }`
+                );
             }
         }
     } catch (err) {
@@ -204,5 +282,6 @@ module.exports = {
     insertInToCollection,
     updateInCollection,
     deleteFromCollection,
-    getCollectionMongoose
+    getCollectionMongoose,
+    getDocumentById
 }

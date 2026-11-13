@@ -10,7 +10,6 @@ const { exec } = require('child_process');
 const express = require('express');
 const WebSocket = require('ws');
 const cookieParser = require('cookie-parser');
-const bodyParser = require('body-parser');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const { MongoClient } = require('mongodb');
@@ -18,8 +17,9 @@ const { MongoClient } = require('mongodb');
 // Local modules
 const routes = require('./routes/routes.js');
 const dbFunc = require('./dbService.js');
+const schemas = require('./mongoose.js');
 const { logger } = require('./helper/Logger.js');
-const { msgHandler } = require('./routes/websocket-routes.js');
+const { msgHandler, checkCollectionAccess, sendJson } = require('./routes/websocket-routes.js');
 
 require('dotenv').config();
 
@@ -36,7 +36,7 @@ let changeStream;
 // Создаем сервер Express и WebSocket
 const app = express();
 app.use(cookieParser())
-app.use(bodyParser.json());
+app.use(express.json({ limit: '2mb' }));
 app.use(cors({credentials:true, origin:process.env.CORS_DOMAINS.split(',')}));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/static', express.static(path.join(__dirname, 'static')));
@@ -62,11 +62,7 @@ const accessControl = {
 
 //отправка сообщения всем клиентам
 const broadcastMessage = (message) => {
-  wss.clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify(message));
-    }
-  });
+  wss.clients.forEach((client) => sendJson(client, message));
 }
 
 //проверка доступа к методу по роли
@@ -113,17 +109,26 @@ function startChangeStream() {
   changeStream.on('change', async (change) => {
     try {
       if (change.ns.coll === 'ADTool') return;
-      const updateCollection = await dbFunc.getCollectionMongoose({collection: change.ns.coll})
-      if (updateCollection.error) {
-        logger.warn(`Коллекция не найдена: ${change.ns.coll}`)
+      const collection = change.ns.coll;
+      const operationType = change.operationType;
+
+      // при delete документа уже не существует — клиент удаляет запись по id;
+      // для остальных операций достаточно загрузить ОДИН документ вместо всей коллекции
+      const full = ['insert', 'update', 'replace'].includes(operationType)
+        ? await dbFunc.getDocumentById(collection, change.documentKey._id)
+        : null;
+
+      if (!full && operationType !== 'delete') {
+        // коллекция без модели или документ уже удалён — рассылать нечего
+        logger.warn(`Изменение (${operationType}) в коллекции без модели или документ не найден: ${collection} | ID - ${change.documentKey._id}`);
         return;
       }
-      const filteredCollection = updateCollection?.find(row => row._id?.equals(change.documentKey._id));
-      logger.info(`Изменение (${change.operationType}) в базе данных: коллекция - ${change.ns.coll} | ID - ${change.documentKey._id}`)
-      broadcastMessage({type:change.operationType, collection:change.ns.coll, id:change.documentKey._id, full:filteredCollection});
+
+      logger.info(`Изменение (${operationType}) в базе данных: коллекция - ${collection} | ID - ${change.documentKey._id}`)
+      broadcastMessage({type:operationType, collection, id:change.documentKey._id, full});
     } catch (err) {
       logger.error(`Ошибка при обработке изменения в базе данных: ${err}`);
-      broadcastMessage({error: `Ошибка при обработке изменения в базе данных: ${err}`})
+      broadcastMessage({error: 'Ошибка при обработке изменения в базе данных на сервере.'})
     }
   });
 
@@ -158,38 +163,57 @@ async function restartMongoAndReconnect() {
   }, 5000);
 }
 
+// heartbeat: пингуем клиентов и убираем «мертвые» соединения
+function startHeartbeat() {
+  return setInterval(() => {
+    wss.clients.forEach((ws) => {
+      if (ws.isAlive === false) {
+        ws.terminate();
+        return;
+      }
+      ws.isAlive = false;
+      ws.ping();
+    });
+  }, 30000);
+}
+
+// корректное освобождение ресурсов при остановке
+async function shutdown(exitCode) {
+  try {
+    if (changeStream) { try { await changeStream.close(); } catch {} }
+    if (mongoClient) { try { await mongoClient.close(); } catch {} }
+    wss.close();
+  } catch (err) {
+    logger.error(`Ошибка при остановке сервера: ${err}`);
+  }
+  process.exit(exitCode);
+}
+
 async function start() {
   try {
+    // сначала mongoose-подключение (модели и dbService), затем raw-клиент для change stream
+    await schemas.connectMongo();
     await startMongoConnection();
     startChangeStream();
-    
-    process.on('SIGINT', async () => {
-      try {
-        await changeStream.close();
-        await mongoClient.close();
-        wss.close();
-        process.exit(0);
-      } catch (err) {
-        logger.error(`Ошибка при остановке сервера: ${err}`);
-      }
-    });
-    process.on('uncaughtException', async (err) => {
+
+    const heartbeat = startHeartbeat();
+
+    process.on('SIGINT', () => shutdown(0));
+    process.on('SIGTERM', () => shutdown(0));
+    process.on('uncaughtException', (err) => {
       logger.error(`Необработанная ошибка: ${err}`);
-      await mongoClient.close();
-      wss.close();
-      process.exit(1);
+      shutdown(1);
     });
-    process.on('SIGTERM', async () => {
-      await changeStream.close();
-      await mongoClient.close();
-      wss.close();
-      process.exit(0);
+    process.on('unhandledRejection', (reason) => {
+      logger.error(`Необработанный rejection: ${reason}`);
     });
     // Обработка подключений WebSocket, обработка одного клиента
     wss.on('connection', async (ws,req) => {
-      //работа с токенами      
-      // const url = new URL(req.url, `http://${req.headers.host}`);
-      // const token = url.searchParams.get('token');  
+      // пометка живого соединения для heartbeat
+      ws.isAlive = true;
+      ws.on('pong', () => { ws.isAlive = true; });
+
+      //работа с токенами
       let token;
       // Получаем cookies из заголовка
       const cookies = req.headers?.cookie;
@@ -202,7 +226,7 @@ async function start() {
       }
       // Закрываем соединение, если токен отсутствует
       if (!token) {
-        ws.close(); 
+        ws.close();
         logger.warn(`Подключение отклонено: токена не существует (пользователь не найден).`)
         return;
       }
@@ -222,10 +246,10 @@ async function start() {
           } catch (err) {
             if (err.name === 'TokenExpiredError') {
               logger.warn(`Токен истек для пользователя ${decoded?.username || 'неизвестный'}`);
-              ws.send(JSON.stringify({ 
-                error: 'Токен истек, пожалуйста, авторизуйтесь заново.', 
-                cmd: 'logout' 
-              }));
+              sendJson(ws, {
+                error: 'Токен истек, пожалуйста, авторизуйтесь заново.',
+                cmd: 'logout'
+              });
               setTimeout(() => {
                 ws.close();
               }, 2000);
@@ -250,6 +274,9 @@ async function start() {
 
         // Начальная проверка токена
         if (!checkToken()) {
+          // токен недействителен (не истек, а неверный) — закрываем соединение,
+          // чтобы не оставлять «висящие» подключения без обработчиков
+          ws.close();
           return;
         }
 
@@ -269,35 +296,41 @@ async function start() {
             const clientMessage = JSON.parse(message)
             const actionType = clientMessage.type;
             logger.info(`Сообщение от клиента: ${clientIP}`,clientMessage)
-  
-            // Автоматическая проверка прав доступа
+
+            // Автоматическая проверка прав доступа по роли
             if (!checkAccess(actionType, userRole)) {
               logger.warn(`Попытка выполнения действия ${decoded.username} (${actionType}) под ролью ${userRole}`)
-              ws.send(JSON.stringify({ error: 'Доступ запрещен: недостаточно прав для выполнения этого действия.' }));
+              sendJson(ws, { error: 'Доступ запрещен: недостаточно прав для выполнения этого действия.' });
               return;  // Прекращаем выполнение, если доступ запрещён
             }
-            //выполнение методов по 3апросу
+            // проверка доступа к отдельным коллекциям (Users и Access — только admin)
+            if (!checkCollectionAccess(actionType, userRole, clientMessage.data)) {
+              logger.warn(`Попытка записи в защищенную коллекцию ${clientMessage.data?.collection} пользователем ${decoded.username} (${userRole})`)
+              sendJson(ws, { error: 'Доступ запрещен: запись в эту коллекцию разрешена только администратору.' });
+              return;
+            }
+            //выполнение методов по запросу
             if (msgHandler[actionType]) {
-              await msgHandler[actionType](ws, clientMessage.data, db, wss);
+              await msgHandler[actionType](ws, clientMessage.data, wss);
             } else {
               msgHandler.default(ws, clientMessage.data);
             }
           }
           catch (err) {
             logger.error(`Ошибка при обработке сообщения от клиента: ${err.message}`);
-            ws.send(JSON.stringify({ error: 'Ошибка при обработке сообщения.' }));
+            sendJson(ws, { error: 'Ошибка при обработке сообщения.' });
           }
-          
+
         });
       }
       catch (err) {
         if (err.name === 'TokenExpiredError') {
           // Отправка сообщения об истечении токена клиенту
-          ws.send(JSON.stringify({ error: 'Ваш токен истек. Пожалуйста, авторизуйтесь заново.' }));
-    
+          sendJson(ws, { error: 'Ваш токен истек. Пожалуйста, авторизуйтесь заново.' });
+
           // Отключение клиента
           ws.terminate();
-    
+
           console.log(`${getDateNow()} | Клиент отключен из-за истечения токена: ${req.socket.remoteAddress}`);
           logger.info(`Клиент отключен из-за истечения токена: ${req.socket.remoteAddress}`);
         } else {
@@ -313,9 +346,16 @@ async function start() {
       logger.error(`Ошибка при подключение клиента: ${err}`)
     })
 
-    // Запуск веб-сервера на порту 3000
+    // Запуск веб-сервера (с обработкой ошибок порта, например EADDRINUSE)
+    server.on('error', (err) => {
+      logger.error(`Ошибка HTTP-сервера: ${err}`);
+      console.error(`${getDateNow()} | Ошибка HTTP-сервера: ${err.message}`);
+      process.exit(1);
+    });
+
     server.listen(process.env.PORT, () => {
       logger.info(`Сервер запущен на http://localhost:${process.env.PORT}`)
+      console.log(`${getDateNow()} | Сервер запущен на порту ${process.env.PORT}`);
     });
 
   } catch (error) {

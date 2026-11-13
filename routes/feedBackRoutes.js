@@ -6,9 +6,11 @@ const { logger } = require('../helper/Logger.js');
 
 const router = express.Router();
 
+const UPLOADS_DIR = path.join(__dirname, '../uploads');
+
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        cb(null, 'uploads/');
+        cb(null, UPLOADS_DIR);
     },
     filename: (req, file, cb) => {
         cb(null, Date.now() + path.extname(file.originalname));
@@ -32,22 +34,13 @@ const upload = multer({
     }
 });
 
-// const APS_FILE_PATH = '\\\\10.6.100.13\\PUBLIC\\Информационная безопасность\\aps.xlsx';
-// const APS_FILE_PATH = 'G:\\aps.xlsx';
-
-// router.get('/files/aps', (req, res) => {
-//   res.sendFile(APS_FILE_PATH, (err) => {
-//     if (err) {
-//       console.error('Ошибка при отдаче файла:', err);
-//       return res.status(404).json({ error: 'Файл не найден или нет доступа' });
-//     }
-//   });
-// });
-
 // создание фидбэка
 router.post('/feedback', upload.single('image'), async (req, res) => {
     try {
         const { title, descrip, _who, status } = req.body;
+        if (!title || !_who) {
+            return res.status(400).json({ error: 'Не переданы обязательные поля (title, _who).' });
+        }
         const imagePath = req.file ? `/uploads/${req.file.filename}` : null;
 
         const feedback = schemas.Feedback({
@@ -68,30 +61,41 @@ router.post('/feedback', upload.single('image'), async (req, res) => {
     }
 });
 
+// ошибки multer (тип файла, размер) и фидбэка — в формате JSON, а не HTML
+router.use('/feedback', (err, req, res, next) => {
+    if (err) {
+        logger.warn(`Ошибка загрузки файла feedback: ${err.message}`);
+        return res.status(400).json({ error: err.message || 'Ошибка загрузки файла.' });
+    }
+    next();
+});
+
 // получение всех Feedback
 router.get('/feedbacks', async (req, res) => {
     try {
         const feedbacks = await schemas.Feedback.find();
         res.status(200).json(feedbacks);
     } catch (error) {
-        console.error(error);
+        logger.error(`Ошибка при получении Feedback на сервере. ${error}`);
         res.status(500).json({ error: 'Ошибка при получении Feedback, на сервере' });
     }
 });
 
-// удаление фидбэка
+// удаление фидбэка (только admin и manager)
 router.post('/feedbackdel', async (req, res) => {
     try {
+        if (!['admin', 'manager'].includes(req.user?.role)) {
+            return res.status(403).json({ error: 'Недостаточно прав для удаления feedback.' });
+        }
         const { id } = req.body;
         const deletedFeedback = await schemas.Feedback.findByIdAndDelete(id);
 
         if (!deletedFeedback) {
             return res.status(404).json({ error: 'Feedback для удаления не найден' });
         }
-        logger.info(`Feedback успешно удален - ${id}}`);
+        logger.info(`Feedback успешно удален - ${id}`);
         res.status(200).json({ message: 'Feedback удален успешно' });
     } catch (error) {
-        console.error(error);
         logger.error(`Ошибка удаления feedback: ${error}`);
         res.status(500).json({ error: 'Ошибка сервера, при удалении feedback' });
     }

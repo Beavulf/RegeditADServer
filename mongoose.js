@@ -1,8 +1,25 @@
 const mongoose = require('mongoose');
 require('dotenv').config()
 mongoose.pluralize(null)
-mongoose.connect(process.env.MONGO_DB_CONNECTION_URL);
 const {Schema, model} = mongoose
+const {logger} = require('./helper/Logger.js');
+
+// явное подключение к MongoDB (вызывается из server.js при старте; без побочных эффектов при импорте моделей)
+async function connectMongo() {
+    try {
+        await mongoose.connect(process.env.MONGO_DB_CONNECTION_URL);
+        logger.info('MongoDB (mongoose) подключена');
+        console.log(`MongoDB подключена: ${mongoose.connection.name}`);
+    } catch (err) {
+        logger.error(`Ошибка подключения MongoDB (mongoose): ${err.message}`);
+        throw err;
+    }
+}
+
+// ошибки соединения в процессе работы — в лог, чтобы процесс не падал молча
+mongoose.connection.on('error', (err) => {
+    logger.error(`Ошибка соединения MongoDB: ${err.message}`);
+});
 
 ////////////////////////////////////////////////////
 const usersSchema = new Schema({
@@ -537,6 +554,7 @@ const aps2020 = model('APS2020', aps2020Schema);
 ///////////////////////////////////////////////////
 
 module.exports = {
+    connectMongo,
     Otdel:otdel,
     Doljnost: doljnost,
     Sotrudnik: sotrudnik,

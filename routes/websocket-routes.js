@@ -3,99 +3,127 @@ const dbFunc = require('../dbService.js');
 
 const { logger } = require('../helper/Logger.js');
 
+// коллекции, запись в которые разрешена только роли admin
+const ADMIN_ONLY_COLLECTIONS = ['Users', 'Access'];
+
+// безопасная отправка JSON: не падаем, если сокет уже закрыт
+function sendJson(ws, payload) {
+  try {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(payload));
+    }
+  } catch (err) {
+    logger.error(`Ошибка отправки сообщения клиенту: ${err.message}`);
+  }
+}
+
 const getAllClientIP = (wss) => Array.from(wss.clients)
     .filter(client => client.readyState === WebSocket.OPEN)
-    .map(client => client._socket.remoteAddress);
+    .map(client => client._socket?.remoteAddress);
 
 const msgHandler = {
   getCollectionMongoose: async (ws, messageData) => {
     try {
       const dataCollection = await dbFunc.getCollectionMongoose(messageData)
       if (dataCollection.error) {
-        logger.warn(`Коллекция не найдена: ${dataCollection.logErr}`)
-        ws.send(JSON.stringify({ error: `Коллекция не найдена ${dataCollection.error}` }));
+        logger.warn(`Ошибка получения коллекции: ${dataCollection.logErr || dataCollection.error}`)
+        sendJson(ws, { error: dataCollection.error });
       } else {
-        ws.send(JSON.stringify({type:`getCollectionMongoose`, data:dataCollection, collection:messageData.collection}));
+        sendJson(ws, {type:`getCollectionMongoose`, data:dataCollection, collection:messageData.collection});
       }
     }
     catch(err) {
-      logger.error(`Ошибка при выполнении 3апроса (getCollMongoose)\n ${err}`)
-      ws.send(JSON.stringify({ error: `Ошибка при получении коллекции ${err}` }));
-    }    
+      logger.error(`Ошибка при выполнении запроса (getCollMongoose)\n ${err}`)
+      sendJson(ws, { error: 'Ошибка при получении коллекции на сервере.' });
+    }
   },
 
-  insertInToCollection: async (ws, messageData, db)=>{
+  insertInToCollection: async (ws, messageData) => {
     try {
-      const resInsert = await dbFunc.insertInToCollection(messageData,db)
+      const resInsert = await dbFunc.insertInToCollection(messageData)
       if (resInsert.error) {
-        ws.send(JSON.stringify({ error: `Ошибка при добавлении данных: ${resInsert.error}` }));
-        logger.warn(`Ошибка при добавлении данных: ${resInsert.logErr}`)
+        sendJson(ws, { error: resInsert.error });
+        logger.warn(`Ошибка при добавлении данных: ${resInsert.logErr || resInsert.error}`)
+      } else {
+        // подтверждение клиенту; данные придут через change stream (broadcast)
+        sendJson(ws, { type: 'ack', action: 'insertInToCollection', collection: messageData.collection, inserted: resInsert.inserted });
       }
     }
     catch (err) {
       logger.error(`Ошибка при выполнении запроса (insert)\n ${err}`)
-      ws.send(JSON.stringify({ error: `Ошибка при попытке добавления: ${err}` }));
+      sendJson(ws, { error: 'Ошибка при попытке добавления на сервере.' });
     }
   },
 
-  updateInCollection: async (ws, messageData, db) => {
+  updateInCollection: async (ws, messageData) => {
     try {
-        const updatedDocument = await dbFunc.updateInCollection(messageData, db);
+        const updatedDocument = await dbFunc.updateInCollection(messageData);
         if (updatedDocument.error) {
-            ws.send(JSON.stringify({ error: `Ошибка при обновлении данных, код ошибки - ${updatedDocument.error}` }));
-            logger.warn(`Ошибка при обновлении данных: ${updatedDocument?.logErr}`)
+            sendJson(ws, { error: updatedDocument.error });
+            logger.warn(`Ошибка при обновлении данных: ${updatedDocument?.logErr || updatedDocument.error}`)
+        } else {
+            // данные об изменении разойдутся через change stream; ack подтверждает приём
+            sendJson(ws, { type: 'ack', action: 'updateInCollection', collection: messageData.collection });
         }
     } catch (err) {
-      logger.warn(`Ошибка при выполнении запроса (update)\n ${err}`)
-      ws.send(JSON.stringify({ error: `Ошибка при попытке обновления. (${err})` }));
+      logger.error(`Ошибка при выполнении запроса (update)\n ${err}`)
+      sendJson(ws, { error: 'Ошибка при попытке обновления на сервере.' });
     }
   },
 
-  deleteFromCollection: async (ws, messageData, db) => {
+  deleteFromCollection: async (ws, messageData) => {
     try {
-      const resDelete = await dbFunc.deleteFromCollection(messageData,db)
+      const resDelete = await dbFunc.deleteFromCollection(messageData)
       if (resDelete.error){
-        ws.send(JSON.stringify({ error: `Ошибка при удалении данных, код ошибки - ${resDelete.error}` }));
-        logger.warn(`Ошибка при удалении данных: ${resDelete?.logErr}`)
+        sendJson(ws, { error: resDelete.error });
+        logger.warn(`Ошибка при удалении данных: ${resDelete?.logErr || resDelete.error}`)
       } else {
-        ws.send(JSON.stringify({ message: resDelete }));
+        sendJson(ws, { message: resDelete });
       }
     }
     catch (err) {
       logger.error(`Ошибка при выполнении запроса (delete)\n ${err}`)
-      ws.send(JSON.stringify({ error: `Ошибка при попытке удаления. (${err})` }));
-    }   
+      sendJson(ws, { error: 'Ошибка при попытке удаления на сервере.' });
+    }
   },
 
-  getAllClientsIp: async (ws, messageData, db, wss) => {
+  getAllClientsIp: async (ws, messageData, wss) => {
     try {
       const clientIP = getAllClientIP(wss)
-      if (!clientIP) {
-        ws.send(JSON.stringify({ error: 'Ошибка при получение списка айпи.' }));
-        logger.warn(`Ошибка при получение списка айпи.`)
+      if (!clientIP.length) {
+        sendJson(ws, { error: 'Нет активных подключений.' });
+        logger.warn('Список IP клиентов пуст.')
       } else {
-        ws.send(JSON.stringify({clients: clientIP}));
+        sendJson(ws, {clients: clientIP});
       }
     }
     catch (err) {
-      logger.error(`Ошибка при выполнении запроса (delete)\n ${err}`)
-      ws.send(JSON.stringify({ error: 'Ошибка при выполнении задачи получения айпи клиентов на сервере.' }));
-    }   
+      logger.error(`Ошибка при выполнении запроса (getAllClientsIp)\n ${err}`)
+      sendJson(ws, { error: 'Ошибка при выполнении задачи получения айпи клиентов на сервере.' });
+    }
   },
 
-  quitClientConnect: async (ws, messageData, db, wss) => {
+  quitClientConnect: async (ws, messageData, wss) => {
     try {
-      const targetIp = messageData.targetIp
-      wss.clients.forEach((client) => {    
-        if (client.readyState === WebSocket.OPEN && client._socket.remoteAddress === targetIp) {
-          client.send(JSON.stringify({
+      const targetIp = messageData?.targetIp
+      if (!targetIp) {
+        sendJson(ws, { error: 'Не указан IP для отключения (targetIp).' });
+        return;
+      }
+      let found = false;
+      wss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN && client._socket?.remoteAddress === targetIp) {
+          found = true;
+          sendJson(client, {
             type: 'quit',
             message: true,
-          }));
-          return true;
+          });
         }
       });
-      return false;
+      if (!found) {
+        sendJson(ws, { error: `Клиент с IP ${targetIp} не найден среди подключений.` });
+        logger.warn(`Клиент для отключения не найден: ${targetIp}`)
+      }
     }
     catch (err) {
       logger.error(`Ошибка при выполнении запроса (quitClientConnect)\n ${err}`)
@@ -103,9 +131,21 @@ const msgHandler = {
   },
 
   default: (ws) => {
-    ws.send(JSON.stringify({ error: 'Метод для работы не найден' }));
-    logger.error(`Метод для работы не найден`)
+    sendJson(ws, { error: 'Метод для работы не найден' });
+    logger.error('Метод для работы не найден')
   }
 };
 
-module.exports = { msgHandler };
+// проверка, что запись в коллекцию разрешена данной роли
+function checkCollectionAccess(actionType, role, messageData) {
+  if (!['insertInToCollection', 'updateInCollection', 'deleteFromCollection'].includes(actionType)) {
+    return true;
+  }
+  const collection = messageData?.collection;
+  if (ADMIN_ONLY_COLLECTIONS.includes(collection) && role !== 'admin') {
+    return false;
+  }
+  return true;
+}
+
+module.exports = { msgHandler, checkCollectionAccess, sendJson };
