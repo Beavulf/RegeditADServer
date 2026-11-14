@@ -463,7 +463,7 @@ const aipsinSchema = new Schema({
 
 ////////////////////////////////////////////////////
 const adtoolSchema = new Schema({
-    id_userA: {type: Number,},
+    login: {type: String,},
     fio: {type: String,},
     date_s: {type: Date},
     date_p: {type: Date},

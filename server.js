@@ -18,13 +18,15 @@ const { MongoClient } = require('mongodb');
 const routes = require('./routes/routes.js');
 const dbFunc = require('./dbService.js');
 const schemas = require('./mongoose.js');
+const { closePool } = require('./connectPg.js');
 const { logger } = require('./helper/Logger.js');
 const { msgHandler, checkCollectionAccess, sendJson } = require('./routes/websocket-routes.js');
 
 require('dotenv').config();
 
 // проверка на наличие переменных окружения
-['PORT', 'JWT_SECRET_KEY', 'MONGO_URL', 'MONGO_DB_CONNECTION_URL', 'CORS_DOMAINS'].forEach((key) => {
+['PORT', 'JWT_SECRET_KEY', 'MONGO_URL', 'MONGO_DB_CONNECTION_URL', 'CORS_DOMAINS',
+ 'PG_HOST', 'PG_PORT', 'PG_USER', 'PG_PASSWORD', 'PG_DATABASE'].forEach((key) => {
   if (!process.env[key]) throw new Error(`Не задана переменная окружения: ${key}`);
 });
 
@@ -182,6 +184,7 @@ async function shutdown(exitCode) {
   try {
     if (changeStream) { try { await changeStream.close(); } catch {} }
     if (mongoClient) { try { await mongoClient.close(); } catch {} }
+    await closePool(); // пул PostgreSQL (источник данных ADTool)
     wss.close();
   } catch (err) {
     logger.error(`Ошибка при остановке сервера: ${err}`);
@@ -197,6 +200,11 @@ async function start() {
     startChangeStream();
 
     const heartbeat = startHeartbeat();
+
+    // после синхронизации ADTool из PostgreSQL сообщаем клиентам (данные коллекции через change stream не расходятся)
+    process.on('adtool:synced', (count) => {
+      broadcastMessage({ warning: `Данные ADTool обновлены из базы WEB AD Tools (${count} записей). Нажмите «загр.» на вкладке ADTool для загрузки.` });
+    });
 
     process.on('SIGINT', () => shutdown(0));
     process.on('SIGTERM', () => shutdown(0));

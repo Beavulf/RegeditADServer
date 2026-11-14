@@ -1,40 +1,35 @@
-const sql = require('mssql');
+const { Pool } = require('pg');
 const mongoose = require('mongoose');
 require('dotenv').config()
 const {logger} = require('./helper/Logger.js');
 
-// whitelist таблиц, доступных для чтения из SQL (защита от SQL-инъекции через tableName)
-const ALLOWED_TABLES = ['ArchiveUserToChange'];
-// лимит строк, выгружаемых из SQL за одну синхронизацию
-const SYNC_LIMIT = 10000;
-
-// Конфигурация подключения к SQL Server
-const config = {
-  user: process.env.SQL_USER,
-  password: process.env.SQL_PASSWORD,
-  server: process.env.SQL_SERVER,
-  database: process.env.SQL_DATABASE,
-  options: {
-    encrypt: true,
-    trustServerCertificate: true   // для локальной разработки можно использовать true, на продакшене – установить по необходимости
-  }
+// русские названия типов задач (метки должны совпадать с BTN_LIST_ADTOOL в SotrInfo.jsx!)
+const TYPE_LABELS = {
+  OTPYSK: 'Отпуск',
+  STAJIROVKA: 'Стажировка',
+  PRODLENIE_OTPYSKA: 'Продление отп.',
+  KOMANDIROVKA: 'Командировка',
+  UCHEBA: 'Учеба',
+  DEKRET: 'Декрет',
+  SOC_OTPYSK: 'Соц. отпуск',
 };
 
-// переиспользуемое подключение к SQL (глобальный пул mssql)
-let poolPromise = null;
-async function getPool() {
-  if (!poolPromise) {
-    poolPromise = sql.connect({
-      ...config,
-      connectionTimeout: 30000, // 30 секунд таймаут на подключение
-      requestTimeout: 30000     // 30 секунд таймаут на запрос
-    }).catch((err) => {
-      poolPromise = null; // при ошибке разрешаем повторную попытку при следующем вызове
-      throw err;
-    });
-  }
-  return poolPromise;
-}
+// источник данных — PostgreSQL приложения WEB AD Tools (schedule-ad-blocker)
+const ARCHIVE_TABLE = 'archive_schedules';
+// лимит строк, выгружаемых за одну синхронизацию
+const SYNC_LIMIT = 10000;
+
+// пул подключений к PostgreSQL
+const pool = new Pool({
+  host: process.env.PG_HOST,
+  port: +(process.env.PG_PORT || 5432),
+  user: process.env.PG_USER,
+  password: process.env.PG_PASSWORD,
+  database: process.env.PG_DATABASE,
+  connectionTimeoutMillis: 30000,
+  query_timeout: 30000,
+  max: 5,
+});
 
 // дескриптор MongoDB из общего подключения mongoose (ожидание готовности)
 function getMongoDb() {
@@ -45,27 +40,39 @@ function getMongoDb() {
   return conn.db;
 }
 
-// получение данных из таблицы (только из белого списка)
-async function getDataFromTable(table) {
-  if (!ALLOWED_TABLES.includes(table)) {
-    throw new Error(`Таблица "${table}" недоступна для чтения.`);
-  }
-  const pool = await getPool();
-  const result = await pool.request().query(`SELECT * FROM ${table}`);
-  return result;
+// чтение архива расписаний (история блокировок AD-аккаунтов) из базы WEB AD Tools
+async function getArchiveSchedules() {
+  const res = await pool.query(
+    `SELECT fio, login, type, "order", "startDate", "endDate", "createdBy", "createdAt"
+     FROM ${ARCHIVE_TABLE}
+     ORDER BY "createdAt" DESC
+     LIMIT ${SYNC_LIMIT}`
+  );
+  return res.rows;
 }
 
-// получение из SQL, данных и перезапись их в mongodb
-async function getAndRewriteArchiveData() {
+// маппинг полей PostgreSQL в формат коллекции ADTool
+function mapArchiveRow(row) {
+  return {
+    login: row.login,
+    fio: row.fio,
+    date_s: row.startDate,
+    date_p: row.endDate,
+    prikaz: row.order,
+    who: row.createdBy,
+    date_z: row.createdAt,
+    descriptions: TYPE_LABELS[row.type] || row.type || '',
+    is_locked: false,
+  };
+}
+
+// синхронизация: PostgreSQL -> MongoDB (коллекция ADTool)
+async function syncArchiveToMongo() {
   let tempCollectionName = null;
 
   try {
-    // Получение данных с ограничением
-    const pool = await getPool();
-    let data = await pool.request().query(`SELECT TOP ${SYNC_LIMIT} * FROM ArchiveUserToChange`);
-    const result = data.recordset;
-
-    if (result.length === 0) {
+    const rows = await getArchiveSchedules();
+    if (rows.length === 0) {
       return { success: 'Нет данных для синхронизации' };
     }
 
@@ -75,22 +82,26 @@ async function getAndRewriteArchiveData() {
     tempCollectionName = `ADTool_sync_${Date.now()}`;
     const tempCollection = db.collection(tempCollectionName);
 
+    const mapped = rows.map(mapArchiveRow);
     const batchSize = 1000;
-    for (let i = 0; i < result.length; i += batchSize) {
-      await tempCollection.insertMany(result.slice(i, i + batchSize), { ordered: false });
+    for (let i = 0; i < mapped.length; i += batchSize) {
+      await tempCollection.insertMany(mapped.slice(i, i + batchSize), { ordered: false });
     }
 
     await tempCollection.rename('ADTool', { dropTarget: true });
     tempCollectionName = null; // переименована — чистить нечего
 
-    if (result.length >= SYNC_LIMIT) {
-      logger.warn(`Синхронизация ADTool: достигнут лимит ${SYNC_LIMIT} строк — часть данных в SQL могла не попасть в выгрузку.`);
+    if (rows.length >= SYNC_LIMIT) {
+      logger.warn(`Синхронизация ADTool: достигнут лимит ${SYNC_LIMIT} строк — часть данных в PostgreSQL могла не попасть в выгрузку.`);
     }
-    logger.info(`Синхронизация ADTool завершена: ${result.length} записей.`);
-    return { success: `Синхронизация завершена успешно (${result.length} записей).` };
+    logger.info(`Синхронизация ADTool завершена: ${rows.length} записей из ${ARCHIVE_TABLE}.`);
+
+    // уведомляем сервер (server.js) — чтобы разослать клиентам предупреждение об обновлении данных
+    process.emit('adtool:synced', rows.length);
+    return { success: `Синхронизация завершена успешно (${rows.length} записей).` };
 
   } catch (err) {
-    logger.error(`Ошибка при выполнении периодической задачи: ${err}`);
+    logger.error(`Ошибка при синхронизации ADTool из PostgreSQL: ${err}`);
     return { error: 'Ошибка синхронизации: ' + err.message };
   } finally {
     // если что-то упало до переименования — убираем временную коллекцию
@@ -120,7 +131,7 @@ async function startPeriodicTask(interval = 60000 * 60 * 3) { // По умолч
   }
   if (interval > 0) {
     intervalToFetch = interval
-    intervalId = setInterval(getAndRewriteArchiveData, interval);
+    intervalId = setInterval(syncArchiveToMongo, interval);
     return {success:`Периодическая задача запущена с интервалом ${interval / 60000 / 60} ч`}
   }
   return {warn:'Интервал периодической задачи не может быть отрицательным или равным нулю'}
@@ -142,10 +153,16 @@ function getIntervalTime() {
   return intervalToFetch ? intervalToFetch / 60000 / 60 : null;
 }
 
+// закрытие пула PostgreSQL при остановке сервера
+async function closePool() {
+  try { await pool.end(); } catch {}
+}
+
 module.exports = {
-    getDataFromTable,
+    getArchiveSchedules,
+    syncArchiveToMongo,
     startPeriodicTask,
     stopPeriodicTask,
-    getAndRewriteArchiveData,
-    getIntervalTime
+    getIntervalTime,
+    closePool
 }

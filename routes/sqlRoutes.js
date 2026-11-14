@@ -1,5 +1,5 @@
 const express = require('express');
-const { getDataFromTable, startPeriodicTask, getAndRewriteArchiveData, stopPeriodicTask, getIntervalTime } = require('../connectSql.js');
+const { syncArchiveToMongo, startPeriodicTask, stopPeriodicTask, getIntervalTime, closePool } = require('../connectPg.js');
 const dbFunc = require('../dbService.js');
 const { logger } = require('../helper/Logger.js');
 
@@ -16,28 +16,7 @@ router.get('/allpdoka', async (req, res) => {
     }
 });
 
-// получение данных из SQL базы (таблицы ограничены белым списком в connectSql.js)
-router.get('/getsqldata', async (req, res) => {
-    const tableName = req.query.tableName;
-
-    if (!tableName) {
-        return res.status(400).json({ error: 'Необходимо указать параметр tableName.' });
-    }
-    try {
-        const tableData = await getDataFromTable(tableName)
-        res.status(200).json(tableData.recordset);
-    }
-    catch (error) {
-        // таблица вне белого списка — понятная ошибка клиенту, остальное — в лог
-        if (error.message?.includes('недоступна для чтения')) {
-            return res.status(400).json({ error: error.message });
-        }
-        logger.error(`Ошибка при получении SQL-данных (${tableName}): ${error}`);
-        res.status(500).json({ error: 'Ошибка при получении SQL-данных на сервере.' });
-    }
-});
-
-// запуск интервала обновления SQL либо смена времени
+// запуск интервала синхронизации ADTool из PostgreSQL либо смена времени
 router.get('/startinterval', async (req, res) => {
     const time = req.query.time
 
@@ -53,8 +32,8 @@ router.get('/startinterval', async (req, res) => {
             res.status(200).json({ message: resStart.warn })
         }
     } catch (error) {
-        logger.error(`Ошибка при запуске интервала обновления SQL: ${error}`);
-        res.status(500).json({ error: 'Ошибка при запуске функции обновления SQL данных.' });
+        logger.error(`Ошибка при запуске интервала синхронизации: ${error}`);
+        res.status(500).json({ error: 'Ошибка при запуске функции синхронизации данных.' });
     }
 });
 
@@ -68,8 +47,8 @@ router.get('/stopinterval', async (req, res) => {
             res.status(200).json({ message: resStop.error })
         }
     } catch (error) {
-        logger.error(`Ошибка при остановке интервала обновления SQL: ${error}`);
-        res.status(500).json({ error: 'Ошибка при остановке функции обновления SQL данных.' });
+        logger.error(`Ошибка при остановке интервала синхронизации: ${error}`);
+        res.status(500).json({ error: 'Ошибка при остановке функции синхронизации данных.' });
     }
 });
 
@@ -80,25 +59,25 @@ router.get('/intervaltime', async (req, res) => {
         if (time) {
             res.status(200).json({ message: time })
         } else {
-            res.status(200).json({ message: 'Интервал SQL обновления не установлен' })
+            res.status(200).json({ message: 'Интервал синхронизации не установлен' })
         }
     } catch (error) {
-        logger.error(`Ошибка при получении времени интервала SQL: ${error}`);
-        res.status(500).json({ error: 'Ошибка при получении времени интервала SQL обновления.' });
+        logger.error(`Ошибка при получении времени интервала: ${error}`);
+        res.status(500).json({ error: 'Ошибка при получении времени интервала синхронизации.' });
     }
 });
 
-// получение (загрузка) данных из таблицы сразу
+// принудительная синхронизация данных из PostgreSQL
 router.get('/getdatanow', async (req, res) => {
     try {
-        const result = await getAndRewriteArchiveData()
+        const result = await syncArchiveToMongo()
         if (result.success) {
             res.status(200).json({ message: result.success })
         } else {
             res.status(200).json({ message: 'Загрузка данных не была завершена' })
         }
     } catch (error) {
-        logger.error(`Ошибка при принудительной загрузке данных из SQL: ${error}`);
+        logger.error(`Ошибка при принудительной синхронизации данных: ${error}`);
         res.status(500).json({ error: 'Ошибка при получении данных на сервере.' });
     }
 });
